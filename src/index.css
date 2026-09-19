@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+
+@font-face {
+  font-family: 'Geist:Regular';
+  src: local('Trebuchet MS');
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: 'Geist:Medium';
+  src: local('Trebuchet MS');
+  font-style: normal;
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: 'Geist:SemiBold';
+  src: local('Trebuchet MS');
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: 'Geist:Bold';
+  src: local('Trebuchet MS');
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: 'Geist:ExtraBold';
+  src: local('Trebuchet MS');
+  font-style: normal;
+  font-weight: 800;
+}
+
+@font-face {
+  font-family: 'Inter:Regular';
+  src: local('Arial');
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: 'Inter:Medium';
+  src: local('Arial');
+  font-style: normal;
+  font-weight: 500;
+}
