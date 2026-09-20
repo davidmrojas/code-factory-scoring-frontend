@@ -35,51 +35,119 @@ type FormularioSolicitante = {
   telefono: string
 }
 
-type PayloadSolicitante = FormularioSolicitante
-type PayloadFinanciero = { ingresos: number; egresos: number }
+type TipoDocumentoApi = "CC" | "CE" | "PASAPORTE" | "PPT" | "TI"
+
+type SolicitantePayload = {
+  tipoDocumento: TipoDocumentoApi
+  numeroDocumento: string
+  nombre: string
+  apellido: string
+  telefono: string
+  email: string
+}
+
+type PerfilFinancieroPayload = {
+  tipoDocumento: TipoDocumentoApi
+  numeroDocumento: string
+  ingresos: number
+  egresos: number
+}
 
 type ErroresSolicitante = Partial<Record<keyof FormularioSolicitante, string>>
 
 type FormularioFinanciero = { ingresos: string; egresos: string }
 type ErroresFinancieros = Partial<Record<keyof FormularioFinanciero, string>>
 
+class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+  }
+}
+
 function normalizarTexto(value: string) {
   return value.trim().replace(/\s+/g, " ")
 }
 
-function normalizarSolicitante(
-  form: FormularioSolicitante,
-): PayloadSolicitante {
+const API_URL = import.meta.env.VITE_API_URL
+
+const TIPO_DOCUMENTO_API: Record<string, TipoDocumentoApi> = {
+  "Cédula de Ciudadanía": "CC",
+  "Cédula de Extranjería": "CE",
+  "Pasaporte Nacional": "PASAPORTE",
+  "Permiso por Protección Temporal": "PPT",
+  "Tarjeta de Identidad": "TI",
+}
+
+function obtenerTipoDocumentoApi(tipoDoc: string): TipoDocumentoApi {
+  const tipoDocumento = TIPO_DOCUMENTO_API[tipoDoc]
+  if (!tipoDocumento) throw new Error("Tipo de documento no soportado.")
+  return tipoDocumento
+}
+
+function normalizarSolicitante(form: FormularioSolicitante): SolicitantePayload {
   return {
-    tipoDoc: form.tipoDoc.trim(),
-    numDoc: form.numDoc.replace(/\s/g, "").trim(),
-    nombres: normalizarTexto(form.nombres),
-    apellidos: normalizarTexto(form.apellidos),
-    correo: form.correo.trim().toLowerCase(),
+    tipoDocumento: obtenerTipoDocumentoApi(form.tipoDoc),
+    numeroDocumento: form.numDoc.replace(/\s/g, "").trim(),
+    nombre: normalizarTexto(form.nombres),
+    apellido: normalizarTexto(form.apellidos),
     telefono: form.telefono.trim(),
+    email: form.correo.trim().toLowerCase(),
   }
 }
 
-// Punto de integración para reemplazar el mock por un POST al backend.
-async function guardarSolicitante(data: PayloadSolicitante): Promise<void> {
-  try {
-    await Promise.resolve(data)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido"
-    throw new Error(`No fue posible guardar el solicitante: ${message}`)
+async function guardarSolicitante(
+  payload: SolicitantePayload,
+): Promise<unknown> {
+  if (!API_URL) throw new Error("La URL del backend no está configurada.")
+
+  const response = await fetch(`${API_URL}/api/solicitantes`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.text()
+    throw new ApiError(
+      response.status,
+      errorBody || `Error al registrar solicitante: HTTP ${response.status}`,
+    )
   }
+
+  return response.json()
 }
 
-// Punto de integración para persistir los datos financieros mediante la API.
 async function guardarDatosFinancieros(
-  data: PayloadFinanciero,
-): Promise<void> {
-  try {
-    await Promise.resolve(data)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido"
-    throw new Error(`No fue posible guardar los datos financieros: ${message}`)
+  payload: PerfilFinancieroPayload,
+): Promise<unknown> {
+  if (!API_URL) throw new Error("La URL del backend no está configurada.")
+
+  const response = await fetch(`${API_URL}/api/perfil-financiero`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.text()
+    throw new ApiError(
+      response.status,
+      errorBody ||
+        `Error al guardar perfil financiero: HTTP ${response.status}`,
+    )
   }
+
+  return response.json()
 }
 
 const OPCIONES_MENU = [
@@ -376,7 +444,7 @@ const OPCIONES_TIPO_DOCUMENTO = [
   "Cédula de Ciudadanía",
   "Cédula de Extranjería",
   "Pasaporte Nacional",
-  "NIT",
+  "Permiso por Protección Temporal",
   "Tarjeta de Identidad",
 ]
 
@@ -387,7 +455,6 @@ const DOCUMENTOS_DUPLICADOS: Record<string, string[]> = {
 const TIPOS_DOCUMENTO_NUMERICOS = new Set([
   "Cédula de Ciudadanía",
   "Cédula de Extranjería",
-  "NIT",
   "Tarjeta de Identidad",
 ])
 
@@ -440,10 +507,10 @@ function validarSolicitante(form: FormularioSolicitante): ErroresSolicitante {
 
 function PasoRegistro({
   onSuccess,
-  isSaving,
+  isSavingSolicitante,
 }: {
-  onSuccess: (d: PayloadSolicitante) => void | Promise<void>
-  isSaving: boolean
+  onSuccess: (d: SolicitantePayload) => void | Promise<void>
+  isSavingSolicitante: boolean
 }) {
   const uid = useId()
   const [form, setForm] = useState<FormularioSolicitante>({
@@ -534,8 +601,13 @@ function PasoRegistro({
       Object.keys(errs).length === 0 &&
       !isDuplicate &&
       !isCheckingDuplicate
-    )
-      await onSuccess(normalizarSolicitante(form))
+    ) {
+      try {
+        await onSuccess(normalizarSolicitante(form))
+      } catch {
+        setErrors({ numDoc: "No fue posible preparar el registro." })
+      }
+    }
   }
 
   const fid = (k: string) => `${uid}-${k}`
@@ -764,10 +836,10 @@ function PasoRegistro({
         <div className="flex flex-col gap-3 w-full">
           <button
             type="submit"
-            disabled={hasValidationErrors || isSaving}
-            aria-disabled={hasValidationErrors || isSaving}
+            disabled={hasValidationErrors || isSavingSolicitante}
+            aria-disabled={hasValidationErrors || isSavingSolicitante}
             className={`flex gap-2 h-[46px] items-center justify-center rounded-lg w-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2563eb] ${
-              hasValidationErrors || isSaving
+              hasValidationErrors || isSavingSolicitante
                 ? "bg-[#e5e7eb] cursor-not-allowed"
                 : "bg-[#2563eb] hover:bg-[#1d4ed8] active:bg-[#1e40af] cursor-pointer"
             }`}
@@ -775,18 +847,18 @@ function PasoRegistro({
             <div className="size-4 relative shrink-0" aria-hidden="true">
               <img
                 alt=""
-                className={`absolute inset-0 size-full ${isSaving ? "animate-pulse" : ""}`}
+                className={`absolute inset-0 size-full ${isSavingSolicitante ? "animate-pulse" : ""}`}
                 src={ICONOS.guardar}
               />
             </div>
             <span
               className={`font-['Geist:SemiBold'] font-semibold text-sm whitespace-nowrap ${
-                hasValidationErrors || isSaving
+                hasValidationErrors || isSavingSolicitante
                   ? "text-[#9ca3af]"
                   : "text-white"
               }`}
             >
-              {isSaving ? "Guardando..." : "Guardar Solicitante"}
+              {isSavingSolicitante ? "Guardando..." : "Guardar Solicitante"}
             </span>
           </button>
           <p className="font-['Geist:Regular'] font-normal text-[#64748b] text-[11px] text-center">
@@ -834,11 +906,11 @@ function validarFinanzas(form: FormularioFinanciero): ErroresFinancieros {
 function PasoFinanciero({
   onSuccess,
   onBack,
-  isSaving,
+  isSavingFinanciero,
 }: {
   onSuccess: (ing: number, eg: number) => void
   onBack: () => void
-  isSaving: boolean
+  isSavingFinanciero: boolean
 }) {
   const uid = useId()
   const [form, setForm] = useState<FormularioFinanciero>({
@@ -1051,10 +1123,10 @@ function PasoFinanciero({
         <div className="flex flex-col gap-3 w-full">
           <button
             type="submit"
-            disabled={hasValidationErrors || isSaving}
-            aria-disabled={hasValidationErrors || isSaving}
+            disabled={hasValidationErrors || isSavingFinanciero}
+            aria-disabled={hasValidationErrors || isSavingFinanciero}
             className={`flex gap-2 h-[46px] items-center justify-center rounded-lg w-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2563eb] ${
-              hasValidationErrors || isSaving
+              hasValidationErrors || isSavingFinanciero
                 ? "bg-[#e2e8f0] cursor-not-allowed"
                 : "bg-[#2563eb] hover:bg-[#1d4ed8] cursor-pointer"
             }`}
@@ -1062,18 +1134,20 @@ function PasoFinanciero({
             <div className="size-4 relative shrink-0" aria-hidden="true">
               <img
                 alt=""
-                className={`absolute inset-0 size-full ${isSaving ? "animate-pulse" : ""}`}
+                className={`absolute inset-0 size-full ${isSavingFinanciero ? "animate-pulse" : ""}`}
                 src={ICONOS.guardar}
               />
             </div>
             <span
               className={`font-['Geist:SemiBold'] font-semibold text-sm whitespace-nowrap ${
-                hasValidationErrors || isSaving
+                hasValidationErrors || isSavingFinanciero
                   ? "text-[#94a3b8]"
                   : "text-white"
               }`}
             >
-              {isSaving ? "Guardando..." : "Guardar Datos Financieros"}
+              {isSavingFinanciero
+                ? "Guardando..."
+                : "Guardar Datos Financieros"}
             </span>
           </button>
           <button
@@ -1243,12 +1317,42 @@ function ResumenFinanciero({
   )
 }
 
+function mensajeErrorSolicitante(error: unknown) {
+  if (error instanceof ApiError && error.status === 409) {
+    return "El documento ya está registrado en el backend."
+  }
+  if (error instanceof TypeError) {
+    return "No fue posible conectar con el backend."
+  }
+  if (error instanceof Error) return error.message
+  return "No fue posible registrar el solicitante."
+}
+
+function mensajeErrorFinanciero(error: unknown) {
+  if (error instanceof ApiError) {
+    if (error.status === 400) return "Los datos financieros no son válidos."
+    if (error.status === 404) return "No se encontró el solicitante registrado."
+    if (error.status === 409) return "El perfil financiero ya existe."
+    if (error.status === 500) return "El backend reportó un error interno."
+  }
+  if (error instanceof TypeError) {
+    return "No fue posible conectar con el backend."
+  }
+  if (error instanceof Error) return error.message
+  return "No fue posible guardar los datos financieros."
+}
+
 // Orquesta el flujo de registro y conserva el estado entre etapas.
 
 export default function App() {
   const [step, setStep] = useState(0)
   const [toast, setToast] = useState<EstadoNotificacion>(null)
-  const [isSaving, setIsSaving] = useState(false)
+  const [isSavingSolicitante, setIsSavingSolicitante] = useState(false)
+  const [isSavingFinanciero, setIsSavingFinanciero] = useState(false)
+  const [solicitanteRegistrado, setSolicitanteRegistrado] = useState<{
+    tipoDocumento: TipoDocumentoApi
+    numeroDocumento: string
+  } | null>(null)
   const [finData, setFinData] = useState<{ ing: number; eg: number } | null>(
     null,
   )
@@ -1259,37 +1363,48 @@ export default function App() {
     "Resumen del Análisis",
   ]
 
-  const handleRegSuccess = async (data: PayloadSolicitante) => {
-    setIsSaving(true)
+  const handleRegSuccess = async (data: SolicitantePayload) => {
+    setIsSavingSolicitante(true)
     try {
       await guardarSolicitante(data)
+      setSolicitanteRegistrado({
+        tipoDocumento: data.tipoDocumento,
+        numeroDocumento: data.numeroDocumento,
+      })
       setToast({
         type: "success",
         title: "Solicitante registrado con éxito. ID generado",
         sub: `REF: CRD-${new Date().getFullYear()}-${String(Math.floor(10000 + Math.random() * 90000))}`,
       })
-      setTimeout(() => {
-        setStep(1)
-        setIsSaving(false)
-      }, 1000)
-    } catch {
-      setIsSaving(false)
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000))
+      setStep(1)
+    } catch (error) {
       setToast({
         type: "error",
         title: "No fue posible registrar el solicitante",
-        sub: "Revise la conexión con el backend e intente nuevamente.",
+        sub: mensajeErrorSolicitante(error),
       })
+    } finally {
+      setIsSavingSolicitante(false)
     }
   }
 
   const handleFinSuccess = async (ing: number, eg: number) => {
-    setIsSaving(true)
+    setIsSavingFinanciero(true)
     try {
+      if (!solicitanteRegistrado) {
+        throw new Error("No hay un solicitante registrado.")
+      }
+
       if (!Number.isFinite(ing) || !Number.isFinite(eg) || ing < 0 || eg < 0) {
         throw new Error("Los valores financieros no son válidos.")
       }
 
-      const payload: PayloadFinanciero = { ingresos: ing, egresos: eg }
+      const payload: PerfilFinancieroPayload = {
+        ...solicitanteRegistrado,
+        ingresos: ing,
+        egresos: eg,
+      }
       await guardarDatosFinancieros(payload)
       setFinData({ ing, eg })
       setToast({
@@ -1297,24 +1412,25 @@ export default function App() {
         title: "Datos financieros guardados exitosamente",
         sub: "El análisis de riesgo crediticio ha sido actualizado.",
       })
-      setTimeout(() => {
-        setStep(2)
-        setIsSaving(false)
-      }, 1000)
-    } catch {
-      setIsSaving(false)
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000))
+      setStep(2)
+    } catch (error) {
       setToast({
         type: "error",
         title: "No fue posible guardar los datos financieros",
-        sub: "Revise la conexión con el backend e intente nuevamente.",
+        sub: mensajeErrorFinanciero(error),
       })
+    } finally {
+      setIsSavingFinanciero(false)
     }
   }
 
   const handleReset = () => {
     setStep(0)
+    setSolicitanteRegistrado(null)
     setFinData(null)
-    setIsSaving(false)
+    setIsSavingSolicitante(false)
+    setIsSavingFinanciero(false)
     setToast(null)
   }
 
@@ -1333,13 +1449,16 @@ export default function App() {
             <IndicadorPasos current={step} />
 
             {step === 0 && (
-              <PasoRegistro onSuccess={handleRegSuccess} isSaving={isSaving} />
+              <PasoRegistro
+                onSuccess={handleRegSuccess}
+                isSavingSolicitante={isSavingSolicitante}
+              />
             )}
             {step === 1 && (
               <PasoFinanciero
                 onSuccess={handleFinSuccess}
                 onBack={() => setStep(0)}
-                isSaving={isSaving}
+                isSavingFinanciero={isSavingFinanciero}
               />
             )}
             {step === 2 && finData && (
