@@ -355,9 +355,28 @@ const DOCUMENTOS_DUPLICADOS: Record<string, string[]> = {
   "Cédula de Ciudadanía": ["1023456789"],
 }
 
-// Sustituye la consulta al servicio de solicitantes durante el desarrollo.
-function checkDuplicate(tipoDoc: string, numDoc: string) {
+const TIPOS_DOCUMENTO_NUMERICOS = new Set([
+  "Cédula de Ciudadanía",
+  "Cédula de Extranjería",
+  "NIT",
+  "Tarjeta de Identidad",
+])
+
+// Consulta el mock local de solicitantes; puede sustituirse por una llamada al backend.
+function consultarDuplicadoLocal(tipoDoc: string, numDoc: string) {
   return DOCUMENTOS_DUPLICADOS[tipoDoc]?.includes(numDoc.trim()) ?? false
+}
+
+// Mantiene la misma interfaz asíncrona que tendrá la consulta real al backend.
+async function verificarDocumentoDuplicado(
+  tipoDoc: string,
+  numDoc: string,
+): Promise<boolean> {
+  return Promise.resolve(consultarDuplicadoLocal(tipoDoc, numDoc))
+}
+
+function esDocumentoNumerico(tipoDoc: string) {
+  return TIPOS_DOCUMENTO_NUMERICOS.has(tipoDoc)
 }
 
 function validarSolicitante(form: FormularioSolicitante): ErroresSolicitante {
@@ -367,7 +386,12 @@ function validarSolicitante(form: FormularioSolicitante): ErroresSolicitante {
   if (!form.apellidos.trim()) e.apellidos = "Este campo es obligatorio."
   if (!form.numDoc.trim()) {
     e.numDoc = "Este campo es obligatorio."
-  } else if (checkDuplicate(form.tipoDoc, form.numDoc)) {
+  } else if (
+    esDocumentoNumerico(form.tipoDoc) &&
+    !/^\d{6,15}$/.test(form.numDoc.trim())
+  ) {
+    e.numDoc = "Formato inválido: ingrese solo números (6 a 15 dígitos)."
+  } else if (consultarDuplicadoLocal(form.tipoDoc, form.numDoc)) {
     e.numDoc =
       "El solicitante con este tipo y número de documento ya se encuentra registrado en la plataforma."
   }
@@ -402,18 +426,65 @@ function PasoRegistro({
   const [touched, setTouched] =
     useState<Partial<Record<keyof FormularioSolicitante, boolean>>>({})
   const [submitted, setSubmitted] = useState(false)
+  const [isDuplicate, setIsDuplicate] = useState(false)
+  const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false)
+
+  useEffect(() => {
+    const documentNumber = form.numDoc.trim()
+    const documentIsValid =
+      Boolean(documentNumber) &&
+      (!esDocumentoNumerico(form.tipoDoc) || /^\d{6,15}$/.test(documentNumber))
+
+    if (!documentIsValid) {
+      setIsDuplicate(false)
+      setIsCheckingDuplicate(false)
+      return
+    }
+
+    let cancelled = false
+    setIsDuplicate(false)
+    setIsCheckingDuplicate(true)
+
+    void verificarDocumentoDuplicado(form.tipoDoc, documentNumber).then(
+      (duplicate) => {
+        if (cancelled) return
+        setIsDuplicate(duplicate)
+        setIsCheckingDuplicate(false)
+      },
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [form.tipoDoc, form.numDoc])
 
   const validationErrors = validarSolicitante(form)
-  const active = submitted ? validationErrors : errors
+  const active = submitted
+    ? validationErrors
+    : isDuplicate
+      ? {
+          ...errors,
+          numDoc:
+            "El solicitante con este tipo y número de documento ya se encuentra registrado en la plataforma.",
+        }
+      : errors
   const hasErrors = Object.keys(active).length > 0
-  const hasValidationErrors = Object.keys(validationErrors).length > 0
+  const hasValidationErrors =
+    Object.keys(validationErrors).length > 0 ||
+    isDuplicate ||
+    isCheckingDuplicate
 
   const set =
     (f: keyof FormularioSolicitante) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
       const next = { ...form, [f]: e.target.value }
       setForm(next)
-      if (touched[f] || submitted || f === "numDoc")
+      if (
+        touched[f] ||
+        submitted ||
+        f === "numDoc" ||
+        (f === "tipoDoc" && next.numDoc.trim())
+      )
         setErrors(validarSolicitante(next))
     }
 
@@ -427,7 +498,12 @@ function PasoRegistro({
     setSubmitted(true)
     const errs = validationErrors
     setErrors(errs)
-    if (Object.keys(errs).length === 0) await onSuccess(form)
+    if (
+      Object.keys(errs).length === 0 &&
+      !isDuplicate &&
+      !isCheckingDuplicate
+    )
+      await onSuccess(form)
   }
 
   const fid = (k: string) => `${uid}-${k}`
@@ -467,7 +543,7 @@ function PasoRegistro({
           </p>
         </div>
 
-        {hasErrors && submitted && (
+        {(isDuplicate || (hasErrors && submitted)) && (
           <div
             role="alert"
             className="bg-[#fffbeb] border-l-4 border-[#f59e0b] flex gap-2.5 items-center p-3 rounded-lg w-full"
@@ -480,15 +556,15 @@ function PasoRegistro({
               />
             </div>
             <p className="font-['Geist:Medium'] font-medium text-[#92400e] text-[13px] flex-1 min-w-0">
-              {checkDuplicate(form.tipoDoc, form.numDoc)
-                ? "No se puede registrar el solicitante. Verifique los datos ingresados."
+              {isDuplicate
+                ? "El documento ya está registrado. Ingrese un tipo y número de documento diferente."
                 : "Por favor, corrija los errores marcados en rojo antes de continuar."}
             </p>
           </div>
         )}
 
         <div className="flex flex-col gap-5 w-full">
-          {/* Tipo Doc + Num Doc */}
+          {/* Tipo y número de documento */}
           <div className="flex gap-4 items-start flex-col sm:flex-row">
             <div className="flex flex-col gap-2 flex-1 min-w-0">
               <label
@@ -548,7 +624,7 @@ function PasoRegistro({
             </div>
           </div>
 
-          {/* Nombres + Apellidos */}
+          {/* Nombres y apellidos */}
           <div className="flex gap-4 items-start flex-col sm:flex-row">
             <div className="flex flex-col gap-2 flex-1 min-w-0">
               <label
@@ -600,7 +676,7 @@ function PasoRegistro({
             </div>
           </div>
 
-          {/* Correo */}
+          {/* Correo electrónico */}
           <div className="flex flex-col gap-2 w-full">
             <label
               htmlFor={fid("correo")}
@@ -626,7 +702,7 @@ function PasoRegistro({
             <MensajeError id={eid("correo")} message={active.correo} />
           </div>
 
-          {/* Teléfono */}
+          {/* Teléfono de contacto */}
           <div className="flex flex-col gap-2 w-full">
             <label
               htmlFor={fid("telefono")}
@@ -830,8 +906,10 @@ function PasoFinanciero({
               </span>
               <input
                 id={fid("ingresos")}
-                type="text"
-                inputMode="numeric"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
                 value={form.ingresos}
                 onChange={set("ingresos")}
                 onBlur={blur}
@@ -876,8 +954,10 @@ function PasoFinanciero({
               </span>
               <input
                 id={fid("egresos")}
-                type="text"
-                inputMode="numeric"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
                 value={form.egresos}
                 onChange={set("egresos")}
                 onBlur={blur}
@@ -921,6 +1001,11 @@ function PasoFinanciero({
               {formatearMoneda(currentNeto)}
             </strong>
             <span className="text-xs">Ingresos Mensuales - Egresos Fijos</span>
+            {currentNeto < 0 && (
+              <span role="alert" className="text-xs font-semibold">
+                Los egresos superan los ingresos mensuales.
+              </span>
+            )}
           </div>
         )}
 
@@ -998,7 +1083,7 @@ function ResumenFinanciero({
       </div>
 
       <div className="flex gap-4 items-start flex-col sm:flex-row w-full">
-        {/* Ingresos card */}
+        {/* Tarjeta de ingresos */}
         <div className="bg-[#f0fdfa] border border-[#e2e8f0] flex flex-col gap-4 items-start p-5 rounded-xl flex-1 min-w-0">
           <div className="flex gap-3 items-center w-full">
             <div
@@ -1027,7 +1112,7 @@ function ResumenFinanciero({
           </div>
         </div>
 
-        {/* Egresos card */}
+        {/* Tarjeta de egresos */}
         <div className="bg-[#f8fafc] border border-[#e2e8f0] flex flex-col gap-4 items-start p-5 rounded-xl flex-1 min-w-0">
           <div className="flex gap-3 items-center w-full">
             <div
@@ -1056,7 +1141,7 @@ function ResumenFinanciero({
           </div>
         </div>
 
-        {/* Neto card */}
+        {/* Tarjeta de ingreso neto */}
         <div
           className={`border border-l-4 flex flex-col gap-4 items-start px-4 py-5 rounded-xl flex-1 min-w-0 ${
             neto >= 0
