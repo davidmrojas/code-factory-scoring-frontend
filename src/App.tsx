@@ -36,6 +36,7 @@ type FormularioSolicitante = {
 }
 
 type PayloadSolicitante = FormularioSolicitante
+type PayloadFinanciero = { ingresos: number; egresos: number }
 
 type ErroresSolicitante = Partial<Record<keyof FormularioSolicitante, string>>
 
@@ -61,15 +62,24 @@ function normalizarSolicitante(
 
 // Punto de integración para reemplazar el mock por un POST al backend.
 async function guardarSolicitante(data: PayloadSolicitante): Promise<void> {
-  await Promise.resolve(data)
+  try {
+    await Promise.resolve(data)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido"
+    throw new Error(`No fue posible guardar el solicitante: ${message}`)
+  }
 }
 
 // Punto de integración para persistir los datos financieros mediante la API.
 async function guardarDatosFinancieros(
-  ingresos: number,
-  egresos: number,
+  data: PayloadFinanciero,
 ): Promise<void> {
-  await Promise.resolve({ ingresos, egresos })
+  try {
+    await Promise.resolve(data)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido"
+    throw new Error(`No fue posible guardar los datos financieros: ${message}`)
+  }
 }
 
 const OPCIONES_MENU = [
@@ -1275,7 +1285,12 @@ export default function App() {
   const handleFinSuccess = async (ing: number, eg: number) => {
     setIsSaving(true)
     try {
-      await guardarDatosFinancieros(ing, eg)
+      if (!Number.isFinite(ing) || !Number.isFinite(eg) || ing < 0 || eg < 0) {
+        throw new Error("Los valores financieros no son válidos.")
+      }
+
+      const payload: PayloadFinanciero = { ingresos: ing, egresos: eg }
+      await guardarDatosFinancieros(payload)
       setFinData({ ing, eg })
       setToast({
         type: "success",
