@@ -35,13 +35,32 @@ type FormularioSolicitante = {
   telefono: string
 }
 
+type PayloadSolicitante = FormularioSolicitante
+
 type ErroresSolicitante = Partial<Record<keyof FormularioSolicitante, string>>
 
 type FormularioFinanciero = { ingresos: string; egresos: string }
 type ErroresFinancieros = Partial<Record<keyof FormularioFinanciero, string>>
 
+function normalizarTexto(value: string) {
+  return value.trim().replace(/\s+/g, " ")
+}
+
+function normalizarSolicitante(
+  form: FormularioSolicitante,
+): PayloadSolicitante {
+  return {
+    tipoDoc: form.tipoDoc.trim(),
+    numDoc: form.numDoc.replace(/\s/g, "").trim(),
+    nombres: normalizarTexto(form.nombres),
+    apellidos: normalizarTexto(form.apellidos),
+    correo: form.correo.trim().toLowerCase(),
+    telefono: form.telefono.trim(),
+  }
+}
+
 // Punto de integración para reemplazar el mock por un POST al backend.
-async function guardarSolicitante(data: FormularioSolicitante): Promise<void> {
+async function guardarSolicitante(data: PayloadSolicitante): Promise<void> {
   await Promise.resolve(data)
 }
 
@@ -364,7 +383,8 @@ const TIPOS_DOCUMENTO_NUMERICOS = new Set([
 
 // Consulta el mock local de solicitantes; puede sustituirse por una llamada al backend.
 function consultarDuplicadoLocal(tipoDoc: string, numDoc: string) {
-  return DOCUMENTOS_DUPLICADOS[tipoDoc]?.includes(numDoc.trim()) ?? false
+  const normalizedDocument = numDoc.replace(/\s/g, "").trim()
+  return DOCUMENTOS_DUPLICADOS[tipoDoc]?.includes(normalizedDocument) ?? false
 }
 
 // Mantiene la misma interfaz asíncrona que tendrá la consulta real al backend.
@@ -410,8 +430,10 @@ function validarSolicitante(form: FormularioSolicitante): ErroresSolicitante {
 
 function PasoRegistro({
   onSuccess,
+  isSaving,
 }: {
-  onSuccess: (d: FormularioSolicitante) => void | Promise<void>
+  onSuccess: (d: PayloadSolicitante) => void | Promise<void>
+  isSaving: boolean
 }) {
   const uid = useId()
   const [form, setForm] = useState<FormularioSolicitante>({
@@ -503,7 +525,7 @@ function PasoRegistro({
       !isDuplicate &&
       !isCheckingDuplicate
     )
-      await onSuccess(form)
+      await onSuccess(normalizarSolicitante(form))
   }
 
   const fid = (k: string) => `${uid}-${k}`
@@ -732,10 +754,10 @@ function PasoRegistro({
         <div className="flex flex-col gap-3 w-full">
           <button
             type="submit"
-            disabled={hasValidationErrors}
-            aria-disabled={hasValidationErrors}
+            disabled={hasValidationErrors || isSaving}
+            aria-disabled={hasValidationErrors || isSaving}
             className={`flex gap-2 h-[46px] items-center justify-center rounded-lg w-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2563eb] ${
-              hasValidationErrors
+              hasValidationErrors || isSaving
                 ? "bg-[#e5e7eb] cursor-not-allowed"
                 : "bg-[#2563eb] hover:bg-[#1d4ed8] active:bg-[#1e40af] cursor-pointer"
             }`}
@@ -743,16 +765,18 @@ function PasoRegistro({
             <div className="size-4 relative shrink-0" aria-hidden="true">
               <img
                 alt=""
-                className="absolute inset-0 size-full"
+                className={`absolute inset-0 size-full ${isSaving ? "animate-pulse" : ""}`}
                 src={ICONOS.guardar}
               />
             </div>
             <span
               className={`font-['Geist:SemiBold'] font-semibold text-sm whitespace-nowrap ${
-                hasValidationErrors ? "text-[#9ca3af]" : "text-white"
+                hasValidationErrors || isSaving
+                  ? "text-[#9ca3af]"
+                  : "text-white"
               }`}
             >
-              Guardar Solicitante
+              {isSaving ? "Guardando..." : "Guardar Solicitante"}
             </span>
           </button>
           <p className="font-['Geist:Regular'] font-normal text-[#64748b] text-[11px] text-center">
@@ -766,11 +790,16 @@ function PasoRegistro({
 
 // Segunda etapa: captura de ingresos, egresos y cálculo del neto disponible.
 
-// Normaliza montos escritos por el usuario y rechaza formatos ambiguos.
-function parseFinancialAmount(value: string) {
+// Convierte un monto a número y rechaza valores vacíos, ambiguos o no finitos.
+function parseFinancialAmount(value: string): number | null {
   const normalized = value.replace(/,/g, "").trim()
+  if (!normalized) return null
+
+  const numericValue = Number(normalized)
+  if (!Number.isFinite(numericValue) || numericValue < 0) return null
   if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null
-  return Number(normalized)
+
+  return numericValue
 }
 
 function validarFinanzas(form: FormularioFinanciero): ErroresFinancieros {
@@ -795,9 +824,11 @@ function validarFinanzas(form: FormularioFinanciero): ErroresFinancieros {
 function PasoFinanciero({
   onSuccess,
   onBack,
+  isSaving,
 }: {
   onSuccess: (ing: number, eg: number) => void
   onBack: () => void
+  isSaving: boolean
 }) {
   const uid = useId()
   const [form, setForm] = useState<FormularioFinanciero>({
@@ -836,9 +867,9 @@ function PasoFinanciero({
     const errs = validarFinanzas(form)
     setErrors(errs)
     if (Object.keys(errs).length === 0) {
-      const ing = parseFinancialAmount(form.ingresos) as number
-      const eg = parseFinancialAmount(form.egresos) as number
-      onSuccess(ing, eg)
+      const ingresos = parseFinancialAmount(form.ingresos)
+      const egresos = parseFinancialAmount(form.egresos)
+      if (ingresos !== null && egresos !== null) onSuccess(ingresos, egresos)
     }
   }
 
@@ -917,7 +948,6 @@ function PasoFinanciero({
                 aria-required="true"
                 aria-invalid={!!active.ingresos}
                 aria-describedby={eid("ingresos")}
-                aria-label="Ingresos Mensuales en pesos colombianos"
                 className={`bg-transparent flex-1 min-w-0 font-['Geist:Regular'] font-normal text-sm outline-none placeholder:text-[#94a3b8] ${
                   active.ingresos ? "text-[#ef4444]" : "text-[#0f172a]"
                 }`}
@@ -965,7 +995,6 @@ function PasoFinanciero({
                 aria-required="true"
                 aria-invalid={!!active.egresos}
                 aria-describedby={eid("egresos")}
-                aria-label="Egresos Fijos en pesos colombianos"
                 className={`bg-transparent flex-1 min-w-0 font-['Geist:Regular'] font-normal text-sm outline-none placeholder:text-[#94a3b8] ${
                   active.egresos ? "text-[#ef4444]" : "text-[#0f172a]"
                 }`}
@@ -1012,10 +1041,10 @@ function PasoFinanciero({
         <div className="flex flex-col gap-3 w-full">
           <button
             type="submit"
-            disabled={hasValidationErrors}
-            aria-disabled={hasValidationErrors}
+            disabled={hasValidationErrors || isSaving}
+            aria-disabled={hasValidationErrors || isSaving}
             className={`flex gap-2 h-[46px] items-center justify-center rounded-lg w-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2563eb] ${
-              hasValidationErrors
+              hasValidationErrors || isSaving
                 ? "bg-[#e2e8f0] cursor-not-allowed"
                 : "bg-[#2563eb] hover:bg-[#1d4ed8] cursor-pointer"
             }`}
@@ -1023,16 +1052,18 @@ function PasoFinanciero({
             <div className="size-4 relative shrink-0" aria-hidden="true">
               <img
                 alt=""
-                className="absolute inset-0 size-full"
+                className={`absolute inset-0 size-full ${isSaving ? "animate-pulse" : ""}`}
                 src={ICONOS.guardar}
               />
             </div>
             <span
               className={`font-['Geist:SemiBold'] font-semibold text-sm whitespace-nowrap ${
-                hasValidationErrors ? "text-[#94a3b8]" : "text-white"
+                hasValidationErrors || isSaving
+                  ? "text-[#94a3b8]"
+                  : "text-white"
               }`}
             >
-              Guardar Datos Financieros
+              {isSaving ? "Guardando..." : "Guardar Datos Financieros"}
             </span>
           </button>
           <button
@@ -1207,6 +1238,7 @@ function ResumenFinanciero({
 export default function App() {
   const [step, setStep] = useState(0)
   const [toast, setToast] = useState<EstadoNotificacion>(null)
+  const [isSaving, setIsSaving] = useState(false)
   const [finData, setFinData] = useState<{ ing: number; eg: number } | null>(
     null,
   )
@@ -1217,30 +1249,57 @@ export default function App() {
     "Resumen del Análisis",
   ]
 
-  const handleRegSuccess = async (d: FormularioSolicitante) => {
-    await guardarSolicitante(d)
-    setToast({
-      type: "success",
-      title: "Solicitante registrado con éxito. ID generado",
-      sub: `REF: CRD-${new Date().getFullYear()}-${String(Math.floor(10000 + Math.random() * 90000))}`,
-    })
-    setTimeout(() => setStep(1), 1000)
+  const handleRegSuccess = async (data: PayloadSolicitante) => {
+    setIsSaving(true)
+    try {
+      await guardarSolicitante(data)
+      setToast({
+        type: "success",
+        title: "Solicitante registrado con éxito. ID generado",
+        sub: `REF: CRD-${new Date().getFullYear()}-${String(Math.floor(10000 + Math.random() * 90000))}`,
+      })
+      setTimeout(() => {
+        setStep(1)
+        setIsSaving(false)
+      }, 1000)
+    } catch {
+      setIsSaving(false)
+      setToast({
+        type: "error",
+        title: "No fue posible registrar el solicitante",
+        sub: "Revise la conexión con el backend e intente nuevamente.",
+      })
+    }
   }
 
   const handleFinSuccess = async (ing: number, eg: number) => {
-    await guardarDatosFinancieros(ing, eg)
-    setFinData({ ing, eg })
-    setToast({
-      type: "success",
-      title: "Datos financieros guardados exitosamente",
-      sub: "El análisis de riesgo crediticio ha sido actualizado.",
-    })
-    setTimeout(() => setStep(2), 1000)
+    setIsSaving(true)
+    try {
+      await guardarDatosFinancieros(ing, eg)
+      setFinData({ ing, eg })
+      setToast({
+        type: "success",
+        title: "Datos financieros guardados exitosamente",
+        sub: "El análisis de riesgo crediticio ha sido actualizado.",
+      })
+      setTimeout(() => {
+        setStep(2)
+        setIsSaving(false)
+      }, 1000)
+    } catch {
+      setIsSaving(false)
+      setToast({
+        type: "error",
+        title: "No fue posible guardar los datos financieros",
+        sub: "Revise la conexión con el backend e intente nuevamente.",
+      })
+    }
   }
 
   const handleReset = () => {
     setStep(0)
     setFinData(null)
+    setIsSaving(false)
     setToast(null)
   }
 
@@ -1258,11 +1317,14 @@ export default function App() {
           <div className="w-full max-w-[900px]">
             <IndicadorPasos current={step} />
 
-            {step === 0 && <PasoRegistro onSuccess={handleRegSuccess} />}
+            {step === 0 && (
+              <PasoRegistro onSuccess={handleRegSuccess} isSaving={isSaving} />
+            )}
             {step === 1 && (
               <PasoFinanciero
                 onSuccess={handleFinSuccess}
                 onBack={() => setStep(0)}
+                isSaving={isSaving}
               />
             )}
             {step === 2 && finData && (
