@@ -58,7 +58,22 @@ vite.config.ts  Configuración de Vite, React y Tailwind
 
 ## Integración con backend
 
-Las funciones de persistencia están preparadas como operaciones asíncronas simuladas. El mock de duplicados se encuentra en `checkDuplicate` y puede sustituirse por una llamada `fetch` hacia el servicio REST correspondiente sin cambiar el flujo de la interfaz.
+La URL base del backend se configura mediante `VITE_API_URL`. Consulte
+`.env.example` para la configuración inicial.
+
+Los contratos preparados para la siguiente etapa son:
+
+- `POST /api/solicitantes`
+- `POST /api/perfil-financiero`
+
+El registro de solicitantes utiliza `tipoDocumento`, `numeroDocumento`,
+`nombre`, `apellido`, `telefono` y `email`. El perfil financiero utiliza
+`tipoDocumento`, `numeroDocumento`, `ingresos` y `egresos`. El mapeo de tipos
+visibles a valores del backend se realiza en `normalizarSolicitante`.
+
+La detección de duplicados continúa usando el mock local hasta disponer de un
+endpoint de consulta definido por el backend. Las peticiones de registro y
+perfil financiero usan `VITE_API_URL` y muestran errores HTTP mediante toast.
 
 ## Convenciones
 
